@@ -1,0 +1,54 @@
+# Dependencies
+node_modules
+npm-debug.log
+
+# Build outputs
+dist
+build
+
+# Test files
+tests
+coverage
+*.test.js
+
+# Environment files
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation
+*.md
+!README.md
+
+# Docker
+Dockerfile*
+docker-compose*
+.docker
+
+# Misc
+.DS_Store
+*.log
+tmp
+temp
+
+# Old project files (not needed for src/)
+app.js
+index.js
+managers
+mws
+loaders
+connect
+cache
+config
+libs
+static_arch
+public
