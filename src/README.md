@@ -2,6 +2,8 @@
 
 A production-grade School Management System API built with Node.js, Express, MongoDB, and Redis.
 
+..
+
 ## Features
 
 - **Authentication**: JWT-based authentication with secure login
@@ -106,17 +108,20 @@ npm test
 ## API Documentation
 
 After starting the server, visit:
+
 - **Swagger UI**: http://localhost:5000/api-docs
 - **Health Check**: http://localhost:5000/api/health
 
 ## API Endpoints
 
 ### Authentication
+
 - `POST /api/auth/setup` - Create initial superadmin (protected by setup secret)
 - `POST /api/auth/login` - Login user
 - `GET /api/auth/profile` - Get current user profile
 
 ### Schools (Superadmin Only)
+
 - `POST /api/schools` - Create school
 - `GET /api/schools` - List all schools
 - `GET /api/schools/:id` - Get school by ID
@@ -126,6 +131,7 @@ After starting the server, visit:
 - `GET /api/schools/:id/admins` - List school admins
 
 ### Classrooms (RBAC Enforced)
+
 - `POST /api/classrooms` - Create classroom
 - `GET /api/classrooms` - List classrooms
 - `GET /api/classrooms/:id` - Get classroom
@@ -134,6 +140,7 @@ After starting the server, visit:
 - `GET /api/classrooms/:id/students` - Get classroom students
 
 ### Students (RBAC Enforced)
+
 - `POST /api/students` - Enroll student
 - `GET /api/students` - List students
 - `GET /api/students/:id` - Get student
@@ -144,23 +151,24 @@ After starting the server, visit:
 
 ## RBAC Rules
 
-| Role | Schools | Classrooms | Students |
-|------|---------|------------|----------|
-| SUPERADMIN | Full CRUD | Full CRUD (any school) | Full CRUD (any school) |
+| Role         | Schools   | Classrooms             | Students               |
+| ------------ | --------- | ---------------------- | ---------------------- |
+| SUPERADMIN   | Full CRUD | Full CRUD (any school) | Full CRUD (any school) |
 | SCHOOL_ADMIN | No access | CRUD (own school only) | CRUD (own school only) |
 
 ## Getting Started
 
 1. **Setup MongoDB and Redis**
+
    ```bash
    # Start MongoDB
    mongod
-   
+
    # Start Redis
    redis-server
    ```
-
 2. **Create Initial Superadmin**
+
    ```bash
    curl -X POST http://localhost:5000/api/auth/setup \
      -H "Content-Type: application/json" \
@@ -171,8 +179,8 @@ After starting the server, visit:
        "setupSecret": "initial-setup-secret-key"
      }'
    ```
-
 3. **Login**
+
    ```bash
    curl -X POST http://localhost:5000/api/auth/login \
      -H "Content-Type: application/json" \
@@ -181,8 +189,8 @@ After starting the server, visit:
        "password": "SecurePass123"
      }'
    ```
-
 4. **Create a School** (use the token from login)
+
    ```bash
    curl -X POST http://localhost:5000/api/schools \
      -H "Content-Type: application/json" \
