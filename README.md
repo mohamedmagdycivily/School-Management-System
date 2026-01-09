@@ -24,34 +24,48 @@ A production-grade School Management System API built with Node.js, Express, Mon
 - **Testing**: Jest + Supertest
 - **Security**: Helmet, CORS
 
+## Connection Architecture
+
+The application uses a modular connection setup:
+
+- **MongoDB**: Connected via `connect/mongo.js` - automatically handles connection lifecycle
+- **Redis**: Connected via `cache/redis-client.js` - used for caching and rate limiting
+- **Configuration**: Managed through `config/index.config.js` - reads from environment variables
+
+Both connections are initialized automatically when the server starts using the existing connection modules.
+
 ## Project Structure
 
 ```
-src/
 ├── config/           # Configuration files
-│   ├── index.js      # Environment configuration
-│   ├── database.js   # MongoDB connection
-│   ├── redis.js      # Redis connection
-│   └── swagger.js    # Swagger configuration
-├── controllers/      # Request handlers
-├── middleware/       # Express middleware
-│   ├── auth.middleware.js     # JWT authentication
-│   ├── rbac.middleware.js     # Role-based access control
-│   ├── scope.middleware.js    # School-based scoping
-│   ├── rateLimiter.middleware.js  # Redis rate limiting
-│   └── errorHandler.middleware.js # Error handling
-├── models/           # Mongoose models
-├── routes/           # API routes with Swagger docs
-├── services/         # Business logic
-├── validators/       # Joi validation schemas
-└── server.js         # Application entry point
-
-tests/
-├── setup.js          # Jest setup
-├── helpers/          # Test utilities
-├── auth.test.js      # Authentication tests
-├── rbac.test.js      # RBAC tests
-└── integration.test.js # Integration tests
+│   ├── index.config.js  # Environment configuration
+│   └── envs/         # Environment-specific configs
+├── connect/          # Database connections
+│   └── mongo.js      # MongoDB connection setup
+├── cache/            # Cache/Redis setup
+│   ├── redis-client.js  # Redis client creation
+│   └── cache.dbh.js  # Cache database handler
+├── src/              # Application source code
+│   ├── config/       # App configuration
+│   │   └── swagger.js # Swagger documentation config
+│   ├── controllers/  # Request handlers
+│   ├── middleware/   # Express middleware
+│   │   ├── auth.middleware.js     # JWT authentication
+│   │   ├── rbac.middleware.js     # Role-based access control
+│   │   ├── scope.middleware.js    # School-based scoping
+│   │   ├── rateLimiter.middleware.js  # Redis rate limiting
+│   │   └── errorHandler.middleware.js # Error handling
+│   ├── models/       # Mongoose models
+│   ├── routes/       # API routes with Swagger docs
+│   ├── services/     # Business logic
+│   ├── validators/   # Joi validation schemas
+│   └── server.js     # Application entry point
+└── tests/            # Test files
+    ├── setup.js      # Jest setup
+    ├── helpers/      # Test utilities
+    ├── auth.test.js  # Authentication tests
+    ├── rbac.test.js  # RBAC tests
+    └── integration.test.js # Integration tests
 ```
 
 ## Environment Variables
@@ -59,33 +73,37 @@ tests/
 Create a `.env` file in the root directory:
 
 ```env
-# Server Configuration
-PORT=5000
-NODE_ENV=development
+# Service Configuration
+SERVICE_NAME=school-management-system
+ENV=development
+USER_PORT=5000
 
 # MongoDB Configuration
-MONGO_URI=mongodb://localhost:27017/school-management
+MONGO_URI=mongodb://localhost:27017/school-management-system
 
-# Redis Configuration
+# Redis Configuration (used for cache and rate limiting)
 REDIS_URI=redis://127.0.0.1:6379
+CACHE_REDIS=redis://127.0.0.1:6379
+CACHE_PREFIX=school-management:ch
 
 # JWT Configuration
-JWT_SECRET=your-super-secret-jwt-key-change-in-production-min-32-chars
-JWT_EXPIRES_IN=24h
+LONG_TOKEN_SECRET=your-long-token-secret-change-in-production
+SHORT_TOKEN_SECRET=your-short-token-secret-change-in-production
+NACL_SECRET=your-nacl-secret-change-in-production
+
+# Security & RBAC
+SETUP_SECRET=initial-setup-secret-change-in-production
+BCRYPT_SALT_ROUNDS=12
 
 # Rate Limiting
 RATE_LIMIT_WINDOW_MS=900000
 RATE_LIMIT_MAX_REQUESTS=100
 
-# Setup Secret (for initial superadmin creation)
-SETUP_SECRET=initial-setup-secret-key-change-in-production
-
-# Bcrypt Configuration
-BCRYPT_SALT_ROUNDS=12
-
 # CORS Configuration
 CORS_ORIGIN=*
 ```
+
+**Note**: The application uses the existing connection setup from `connect/mongo.js` for MongoDB and `cache/redis-client.js` for Redis. These connections are initialized automatically when the server starts.
 
 ## Installation
 
@@ -116,20 +134,25 @@ Services will be available at:
 
 ### Option 2: Local Development
 
+**Prerequisites**: Make sure MongoDB and Redis are running locally
+
 ```bash
 # Install dependencies
 npm install
 
-# Make sure MongoDB and Redis are running locally
-# Start development server
+# Start development server (uses index.js with existing connection setup)
 npm run dev
 
-# Start production server
-npm start
+# Or start the new API server (uses src/server.js)
+node src/server.js
 
 # Run tests
 npm test
 ```
+
+**Connection Setup**: 
+- MongoDB connection is handled by `connect/mongo.js` - automatically connects using `MONGO_URI`
+- Redis connection is handled by `cache/redis-client.js` - automatically connects using `CACHE_REDIS` or `REDIS_URI`
 
 ## API Documentation
 
@@ -190,7 +213,8 @@ After starting the server, visit:
 # Start all services (MongoDB, Redis, and API)
 docker compose up -d
 
-# Wait for services to be healthy, then create superadmin
+# Wait for services to be healthy (check with: docker compose ps)
+# Then create superadmin
 curl -X POST http://localhost:5000/api/auth/setup \
   -H "Content-Type: application/json" \
   -d '{
@@ -200,6 +224,8 @@ curl -X POST http://localhost:5000/api/auth/setup \
     "setupSecret": "initial-setup-secret-key"
   }'
 ```
+
+**Note**: Docker Compose automatically sets the environment variables for MongoDB and Redis connections. The application uses the existing connection methods from `connect/mongo.js` and `cache/redis-client.js`.
 
 ### Manual Setup
 
@@ -213,7 +239,11 @@ curl -X POST http://localhost:5000/api/auth/setup \
    redis-server
    ```
 
-2. **Create Initial Superadmin**
+2. **Configure Environment Variables**
+
+   Create a `.env` file with the connection details (see Environment Variables section above).
+
+3. **Create Initial Superadmin**
 
    ```bash
    curl -X POST http://localhost:5000/api/auth/setup \
