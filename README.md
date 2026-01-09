@@ -2,8 +2,6 @@
 
 A production-grade School Management System API built with Node.js, Express, MongoDB, and Redis.
 
-..
-
 ## Features
 
 - **Authentication**: JWT-based authentication with secure login
@@ -91,10 +89,38 @@ CORS_ORIGIN=*
 
 ## Installation
 
+### Option 1: Docker Compose (Recommended)
+
+The easiest way to run the entire stack (API + MongoDB + Redis):
+
+```bash
+# Start all services
+docker compose up -d
+
+# View logs
+docker compose logs -f app
+
+# Stop all services
+docker compose down
+
+# Stop and remove volumes (clean reset)
+docker compose down -v
+```
+
+Services will be available at:
+
+- **API**: http://localhost:5000
+- **Swagger Docs**: http://localhost:5000/api-docs
+- **MongoDB**: localhost:27017
+- **Redis**: localhost:6379
+
+### Option 2: Local Development
+
 ```bash
 # Install dependencies
 npm install
 
+# Make sure MongoDB and Redis are running locally
 # Start development server
 npm run dev
 
@@ -158,6 +184,25 @@ After starting the server, visit:
 
 ## Getting Started
 
+### Using Docker Compose
+
+```bash
+# Start all services (MongoDB, Redis, and API)
+docker compose up -d
+
+# Wait for services to be healthy, then create superadmin
+curl -X POST http://localhost:5000/api/auth/setup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Super Admin",
+    "email": "admin@school.com",
+    "password": "SecurePass123",
+    "setupSecret": "initial-setup-secret-key"
+  }'
+```
+
+### Manual Setup
+
 1. **Setup MongoDB and Redis**
 
    ```bash
@@ -167,6 +212,7 @@ After starting the server, visit:
    # Start Redis
    redis-server
    ```
+
 2. **Create Initial Superadmin**
 
    ```bash
@@ -179,6 +225,7 @@ After starting the server, visit:
        "setupSecret": "initial-setup-secret-key"
      }'
    ```
+
 3. **Login**
 
    ```bash
@@ -189,6 +236,7 @@ After starting the server, visit:
        "password": "SecurePass123"
      }'
    ```
+
 4. **Create a School** (use the token from login)
 
    ```bash
