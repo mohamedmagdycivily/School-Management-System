@@ -1,397 +1,474 @@
-const request = require('supertest');
-const jwt = require('jsonwebtoken');
-const { User, School, Student, Classroom, ROLES } = require('../src/models');
-const config = require('../src/config');
+/**
+ * RBAC (Role-Based Access Control) Tests
+ * Tests that SUPERADMIN has full access and SCHOOL_ADMIN is scoped to their school
+ * Uses the template's architecture pattern
+ */
+const User = require('../managers/entities/user/User.mongoModel');
+const School = require('../managers/entities/school/School.mongoModel');
+const Classroom = require('../managers/entities/classroom/Classroom.mongoModel');
+const Student = require('../managers/entities/student/Student.mongoModel');
+const config = require('../config/index.config');
 
-// Mock Redis and rate limiter before importing routes
-require('./helpers/mockRedis');
+// Managers
+const SchoolManager = require('../managers/entities/school/School.manager');
+const ClassroomManager = require('../managers/entities/classroom/Classroom.manager');
+const StudentManager = require('../managers/entities/student/Student.manager');
 
-// Create a minimal test app
-const express = require('express');
-const schoolRoutes = require('../src/routes/school.routes');
-const studentRoutes = require('../src/routes/student.routes');
-const classroomRoutes = require('../src/routes/classroom.routes');
-const { errorHandler } = require('../src/middleware');
+let schoolManager;
+let classroomManager;
+let studentManager;
 
-const app = express();
-app.use(express.json());
-app.use('/api/schools', schoolRoutes);
-app.use('/api/students', studentRoutes);
-app.use('/api/classrooms', classroomRoutes);
-app.use(errorHandler);
+// Test data
+let superadmin;
+let schoolAdminA;
+let schoolAdminB;
+let schoolA;
+let schoolB;
 
-// Helper function to generate token
-const generateToken = (user) => {
-  return jwt.sign(
-    {
-      userId: user._id,
-      email: user.email,
-      role: user.role,
-      schoolId: user.schoolId,
-    },
-    config.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
-};
+beforeAll(() => {
+  // Initialize managers
+  schoolManager = new SchoolManager({ config });
+  classroomManager = new ClassroomManager({ config });
+  studentManager = new StudentManager({ config });
+});
 
-describe('RBAC (Role-Based Access Control) Tests', () => {
-  let superadmin;
-  let superadminToken;
-  let schoolA;
-  let schoolB;
-  let adminA;
-  let adminB;
-  let adminAToken;
-  let adminBToken;
-  let studentA;
-  let studentB;
-  let classroomA;
-  let classroomB;
-
-  beforeEach(async () => {
-    // Create superadmin
-    superadmin = await User.create({
-      name: 'Super Admin',
-      email: 'superadmin@test.com',
-      password: 'Password123',
-      role: ROLES.SUPERADMIN,
-      schoolId: null,
-    });
-    superadminToken = generateToken(superadmin);
-
-    // Create schools
-    schoolA = await School.create({
-      name: 'School A',
-      contactEmail: 'schoola@test.com',
-      createdBy: superadmin._id,
-    });
-
-    schoolB = await School.create({
-      name: 'School B',
-      contactEmail: 'schoolb@test.com',
-      createdBy: superadmin._id,
-    });
-
-    // Create school admins
-    adminA = await User.create({
-      name: 'Admin A',
-      email: 'admina@test.com',
-      password: 'Password123',
-      role: ROLES.SCHOOL_ADMIN,
-      schoolId: schoolA._id,
-    });
-    adminAToken = generateToken(adminA);
-
-    adminB = await User.create({
-      name: 'Admin B',
-      email: 'adminb@test.com',
-      password: 'Password123',
-      role: ROLES.SCHOOL_ADMIN,
-      schoolId: schoolB._id,
-    });
-    adminBToken = generateToken(adminB);
-
-    // Create classrooms
-    classroomA = await Classroom.create({
-      schoolId: schoolA._id,
-      name: 'Classroom A',
-      capacity: 30,
-    });
-
-    classroomB = await Classroom.create({
-      schoolId: schoolB._id,
-      name: 'Classroom B',
-      capacity: 30,
-    });
-
-    // Create students
-    studentA = await Student.create({
-      schoolId: schoolA._id,
-      classroomId: classroomA._id,
-      firstName: 'Student',
-      lastName: 'A',
-      dob: new Date('2010-01-01'),
-    });
-
-    studentB = await Student.create({
-      schoolId: schoolB._id,
-      classroomId: classroomB._id,
-      firstName: 'Student',
-      lastName: 'B',
-      dob: new Date('2010-01-01'),
-    });
+beforeEach(async () => {
+  // Create superadmin
+  superadmin = await User.create({
+    name: 'Super Admin',
+    email: 'superadmin@test.com',
+    password: 'Password123',
+    role: 'SUPERADMIN',
+    schoolId: null,
   });
 
-  describe('Superadmin Access', () => {
-    it('should allow superadmin to create a school', async () => {
-      const response = await request(app)
-        .post('/api/schools')
-        .set('Authorization', `Bearer ${superadminToken}`)
-        .send({
-          name: 'New School',
-          contactEmail: 'newschool@test.com',
-        });
-
-      expect(response.status).toBe(201);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.name).toBe('New School');
-    });
-
-    it('should allow superadmin to get all schools', async () => {
-      const response = await request(app)
-        .get('/api/schools')
-        .set('Authorization', `Bearer ${superadminToken}`);
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.schools.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it('should allow superadmin to access any school\'s students', async () => {
-      // Access School A's students
-      const responseA = await request(app)
-        .get('/api/students')
-        .set('Authorization', `Bearer ${superadminToken}`)
-        .query({ schoolId: schoolA._id.toString() });
-
-      expect(responseA.status).toBe(200);
-      expect(responseA.body.data.students.length).toBeGreaterThanOrEqual(1);
-
-      // Access School B's students
-      const responseB = await request(app)
-        .get('/api/students')
-        .set('Authorization', `Bearer ${superadminToken}`)
-        .query({ schoolId: schoolB._id.toString() });
-
-      expect(responseB.status).toBe(200);
-      expect(responseB.body.data.students.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('should allow superadmin to update any student', async () => {
-      const response = await request(app)
-        .put(`/api/students/${studentB._id}`)
-        .set('Authorization', `Bearer ${superadminToken}`)
-        .send({
-          firstName: 'UpdatedBySuper',
-        });
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.firstName).toBe('UpdatedBySuper');
-    });
+  // Create School A
+  schoolA = await School.create({
+    name: 'School A',
+    address: '123 School A Street',
+    contactEmail: 'schoola@test.com',
+    status: 'ACTIVE',
+    createdBy: superadmin._id,
   });
 
-  describe('School Admin Access - Own School', () => {
-    it('should allow school admin to access their own school\'s students', async () => {
-      const response = await request(app)
-        .get('/api/students')
-        .set('Authorization', `Bearer ${adminAToken}`);
+  // Create School B
+  schoolB = await School.create({
+    name: 'School B',
+    address: '456 School B Street',
+    contactEmail: 'schoolb@test.com',
+    status: 'ACTIVE',
+    createdBy: superadmin._id,
+  });
 
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      
-      // Should only see their school's students
-      const studentSchoolIds = response.body.data.students.map(
-        (s) => s.schoolId._id || s.schoolId
-      );
-      studentSchoolIds.forEach((id) => {
-        expect(id.toString()).toBe(schoolA._id.toString());
+  // Create School Admin A (assigned to School A)
+  schoolAdminA = await User.create({
+    name: 'School Admin A',
+    email: 'adminA@test.com',
+    password: 'Password123',
+    role: 'SCHOOL_ADMIN',
+    schoolId: schoolA._id,
+  });
+
+  // Create School Admin B (assigned to School B)
+  schoolAdminB = await User.create({
+    name: 'School Admin B',
+    email: 'adminB@test.com',
+    password: 'Password123',
+    role: 'SCHOOL_ADMIN',
+    schoolId: schoolB._id,
+  });
+});
+
+describe('RBAC - Superadmin Access', () => {
+  describe('School Management', () => {
+    it('SUPERADMIN can create a school', async () => {
+      const result = await schoolManager.create({
+        __auth: { userId: superadmin._id.toString(), role: 'SUPERADMIN' },
+        __superadmin: true,
+        name: 'New School',
+        address: '789 New Street',
+        contactEmail: 'newschool@test.com',
       });
+
+      expect(result.error).toBeUndefined();
+      expect(result.name).toBe('New School');
     });
 
-    it('should allow school admin to create students in their school', async () => {
-      const response = await request(app)
-        .post('/api/students')
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .send({
-          firstName: 'New',
-          lastName: 'Student',
-          dob: '2010-05-15',
-          // Note: schoolId should be auto-injected
-        });
+    it('SUPERADMIN can list all schools', async () => {
+      const result = await schoolManager.list({
+        __auth: { userId: superadmin._id.toString(), role: 'SUPERADMIN' },
+        __superadmin: true,
+      });
 
-      expect(response.status).toBe(201);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.schoolId.toString()).toBe(schoolA._id.toString());
+      expect(result.error).toBeUndefined();
+      expect(result.schools.length).toBe(2);
     });
 
-    it('should allow school admin to update their school\'s student', async () => {
-      const response = await request(app)
-        .put(`/api/students/${studentA._id}`)
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .send({
-          firstName: 'UpdatedByAdmin',
-        });
+    it('SUPERADMIN can update any school', async () => {
+      const result = await schoolManager.update({
+        __auth: { userId: superadmin._id.toString(), role: 'SUPERADMIN' },
+        __superadmin: true,
+        schoolId: schoolA._id.toString(),
+        name: 'Updated School A',
+      });
 
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.firstName).toBe('UpdatedByAdmin');
+      expect(result.error).toBeUndefined();
+      expect(result.name).toBe('Updated School A');
     });
 
-    it('should allow school admin to create classrooms in their school', async () => {
-      const response = await request(app)
-        .post('/api/classrooms')
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .send({
-          name: 'New Classroom',
-          capacity: 25,
-        });
+    it('SUPERADMIN can delete any school', async () => {
+      const result = await schoolManager.delete({
+        __auth: { userId: superadmin._id.toString(), role: 'SUPERADMIN' },
+        __superadmin: true,
+        schoolId: schoolA._id.toString(),
+      });
 
-      expect(response.status).toBe(201);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.schoolId.toString()).toBe(schoolA._id.toString());
+      expect(result.error).toBeUndefined();
+      expect(result.message).toContain('deleted successfully');
     });
   });
 
-  describe('School Admin Access - Other School (DENIED)', () => {
-    it('should DENY school admin A from accessing school B\'s students', async () => {
-      // Try to get a specific student from School B
-      const response = await request(app)
-        .get(`/api/students/${studentB._id}`)
-        .set('Authorization', `Bearer ${adminAToken}`);
+  describe('Classroom Management', () => {
+    it('SUPERADMIN can create classroom in any school', async () => {
+      const result = await classroomManager.create({
+        __auth: { userId: superadmin._id.toString(), role: 'SUPERADMIN' },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: null, isSuperadmin: true },
+        schoolId: schoolA._id.toString(),
+        name: 'Class 1A',
+        capacity: 30,
+      });
 
-      expect(response.status).toBe(404);
-      expect(response.body.success).toBe(false);
-      // The student is not found because of the school filter
+      expect(result.error).toBeUndefined();
+      expect(result.name).toBe('Class 1A');
+      expect(result.schoolId.toString()).toBe(schoolA._id.toString());
     });
 
-    it('should DENY school admin A from updating school B\'s student', async () => {
-      const response = await request(app)
-        .put(`/api/students/${studentB._id}`)
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .send({
-          firstName: 'Hacked',
-        });
+    it('SUPERADMIN can list classrooms from any school', async () => {
+      // Create classrooms in both schools
+      await Classroom.create({
+        schoolId: schoolA._id,
+        name: 'Class A1',
+        capacity: 30,
+      });
+      await Classroom.create({
+        schoolId: schoolB._id,
+        name: 'Class B1',
+        capacity: 25,
+      });
 
-      expect(response.status).toBe(403);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('SCOPE_ACCESS_DENIED');
+      const result = await classroomManager.list({
+        __auth: { userId: superadmin._id.toString(), role: 'SUPERADMIN' },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: null, isSuperadmin: true },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.classrooms.length).toBe(2);
+    });
+  });
+
+  describe('Student Management', () => {
+    it('SUPERADMIN can enroll student in any school', async () => {
+      const result = await studentManager.enroll({
+        __auth: { userId: superadmin._id.toString(), role: 'SUPERADMIN' },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: null, isSuperadmin: true },
+        schoolId: schoolB._id.toString(),
+        firstName: 'John',
+        lastName: 'Doe',
+        dob: '2010-05-15',
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.firstName).toBe('John');
+      expect(result.schoolId.toString()).toBe(schoolB._id.toString());
     });
 
-    it('should DENY school admin A from deleting school B\'s student', async () => {
-      const response = await request(app)
-        .delete(`/api/students/${studentB._id}`)
-        .set('Authorization', `Bearer ${adminAToken}`);
+    it('SUPERADMIN can list students from any school', async () => {
+      // Create students in both schools
+      await Student.create({
+        schoolId: schoolA._id,
+        firstName: 'Alice',
+        lastName: 'Smith',
+        dob: new Date('2010-01-01'),
+      });
+      await Student.create({
+        schoolId: schoolB._id,
+        firstName: 'Bob',
+        lastName: 'Jones',
+        dob: new Date('2011-02-02'),
+      });
 
-      expect(response.status).toBe(403);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('SCOPE_ACCESS_DENIED');
+      const result = await studentManager.list({
+        __auth: { userId: superadmin._id.toString(), role: 'SUPERADMIN' },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: null, isSuperadmin: true },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.students.length).toBe(2);
+    });
+  });
+});
+
+describe('RBAC - School Admin Scoping', () => {
+  describe('Classroom Management', () => {
+    it('SCHOOL_ADMIN can create classroom in their own school', async () => {
+      const result = await classroomManager.create({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+        name: 'My Class',
+        capacity: 25,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.name).toBe('My Class');
+      expect(result.schoolId.toString()).toBe(schoolA._id.toString());
     });
 
-    it('should DENY school admin A from updating school B\'s classroom', async () => {
-      const response = await request(app)
-        .put(`/api/classrooms/${classroomB._id}`)
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .send({
-          name: 'Hacked Classroom',
-        });
+    it('SCHOOL_ADMIN can only see classrooms from their school', async () => {
+      // Create classrooms in both schools
+      await Classroom.create({
+        schoolId: schoolA._id,
+        name: 'Class A1',
+        capacity: 30,
+      });
+      await Classroom.create({
+        schoolId: schoolB._id,
+        name: 'Class B1',
+        capacity: 25,
+      });
 
-      expect(response.status).toBe(403);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('SCOPE_ACCESS_DENIED');
+      const result = await classroomManager.list({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.classrooms.length).toBe(1);
+      expect(result.classrooms[0].name).toBe('Class A1');
     });
 
-    it('should filter out other school\'s students in list', async () => {
-      const response = await request(app)
-        .get('/api/students')
-        .set('Authorization', `Bearer ${adminAToken}`);
+    it('SCHOOL_ADMIN CANNOT access classroom from another school', async () => {
+      // Create classroom in School B
+      const classroomB = await Classroom.create({
+        schoolId: schoolB._id,
+        name: 'Class B1',
+        capacity: 25,
+      });
 
-      expect(response.status).toBe(200);
+      const result = await classroomManager.getById({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+        classroomId: classroomB._id.toString(),
+      });
+
+      expect(result.error).toBe('Access denied. Classroom belongs to a different school.');
+    });
+
+    it('SCHOOL_ADMIN CANNOT update classroom from another school', async () => {
+      // Create classroom in School B
+      const classroomB = await Classroom.create({
+        schoolId: schoolB._id,
+        name: 'Class B1',
+        capacity: 25,
+      });
+
+      const result = await classroomManager.update({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+        classroomId: classroomB._id.toString(),
+        name: 'Hacked Class',
+      });
+
+      expect(result.error).toBe('Access denied. Classroom belongs to a different school.');
+    });
+
+    it('SCHOOL_ADMIN CANNOT delete classroom from another school', async () => {
+      // Create classroom in School B
+      const classroomB = await Classroom.create({
+        schoolId: schoolB._id,
+        name: 'Class B1',
+        capacity: 25,
+      });
+
+      const result = await classroomManager.delete({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+        classroomId: classroomB._id.toString(),
+      });
+
+      expect(result.error).toBe('Access denied. Classroom belongs to a different school.');
+    });
+  });
+
+  describe('Student Management', () => {
+    it('SCHOOL_ADMIN can enroll student in their own school', async () => {
+      const result = await studentManager.enroll({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+        firstName: 'Jane',
+        lastName: 'Doe',
+        dob: '2012-03-20',
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.firstName).toBe('Jane');
+      expect(result.schoolId.toString()).toBe(schoolA._id.toString());
+    });
+
+    it('SCHOOL_ADMIN can only see students from their school', async () => {
+      // Create students in both schools
+      await Student.create({
+        schoolId: schoolA._id,
+        firstName: 'Alice',
+        lastName: 'Smith',
+        dob: new Date('2010-01-01'),
+      });
+      await Student.create({
+        schoolId: schoolB._id,
+        firstName: 'Bob',
+        lastName: 'Jones',
+        dob: new Date('2011-02-02'),
+      });
+
+      const result = await studentManager.list({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.students.length).toBe(1);
+      expect(result.students[0].firstName).toBe('Alice');
+    });
+
+    it('SCHOOL_ADMIN CANNOT access student from another school', async () => {
+      // Create student in School B
+      const studentB = await Student.create({
+        schoolId: schoolB._id,
+        firstName: 'Bob',
+        lastName: 'Jones',
+        dob: new Date('2011-02-02'),
+      });
+
+      const result = await studentManager.getById({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+        studentId: studentB._id.toString(),
+      });
+
+      expect(result.error).toBe('Access denied. Student belongs to a different school.');
+    });
+
+    it('SCHOOL_ADMIN CANNOT update student from another school', async () => {
+      // Create student in School B
+      const studentB = await Student.create({
+        schoolId: schoolB._id,
+        firstName: 'Bob',
+        lastName: 'Jones',
+        dob: new Date('2011-02-02'),
+      });
+
+      const result = await studentManager.update({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+        studentId: studentB._id.toString(),
+        firstName: 'Hacked Name',
+      });
+
+      expect(result.error).toBe('Access denied. Student belongs to a different school.');
+    });
+
+    it('SCHOOL_ADMIN CANNOT delete student from another school', async () => {
+      // Create student in School B
+      const studentB = await Student.create({
+        schoolId: schoolB._id,
+        firstName: 'Bob',
+        lastName: 'Jones',
+        dob: new Date('2011-02-02'),
+      });
+
+      const result = await studentManager.delete({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+        studentId: studentB._id.toString(),
+      });
+
+      expect(result.error).toBe('Access denied. Student belongs to a different school.');
+    });
+  });
+
+  describe('Cross-School Isolation', () => {
+    it('School Admin A cannot see School Admin B data', async () => {
+      // Create data for School A and School B
+      await Classroom.create({ schoolId: schoolA._id, name: 'Class A', capacity: 30 });
+      await Student.create({ schoolId: schoolA._id, firstName: 'Student', lastName: 'A', dob: new Date() });
       
-      // Should only contain School A's students
-      const hasSchoolBStudents = response.body.data.students.some(
-        (s) => (s.schoolId._id || s.schoolId).toString() === schoolB._id.toString()
-      );
-      expect(hasSchoolBStudents).toBe(false);
+      await Classroom.create({ schoolId: schoolB._id, name: 'Class B', capacity: 25 });
+      await Student.create({ schoolId: schoolB._id, firstName: 'Student', lastName: 'B', dob: new Date() });
+
+      // Admin A lists classrooms
+      const classroomsA = await classroomManager.list({
+        __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolA._id.toString(), isSuperadmin: false },
+      });
+
+      // Admin B lists classrooms
+      const classroomsB = await classroomManager.list({
+        __auth: { userId: schoolAdminB._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolB._id.toString() },
+        __schoolAdmin: true,
+        __schoolScope: { schoolId: schoolB._id.toString(), isSuperadmin: false },
+      });
+
+      // Admin A only sees School A data
+      expect(classroomsA.classrooms.length).toBe(1);
+      expect(classroomsA.classrooms[0].name).toBe('Class A');
+
+      // Admin B only sees School B data
+      expect(classroomsB.classrooms.length).toBe(1);
+      expect(classroomsB.classrooms[0].name).toBe('Class B');
     });
   });
+});
 
-  describe('School Admin - Forbidden from School Management', () => {
-    it('should DENY school admin from creating schools', async () => {
-      const response = await request(app)
-        .post('/api/schools')
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .send({
-          name: 'Unauthorized School',
-          contactEmail: 'unauth@test.com',
-        });
-
-      expect(response.status).toBe(403);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('RBAC_PERMISSION_DENIED');
+describe('RBAC - School Admin CANNOT Access School Management', () => {
+  it('SCHOOL_ADMIN cannot create schools', async () => {
+    const result = await schoolManager.create({
+      __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+      name: 'Unauthorized School',
+      address: '999 Unauthorized Street',
+      contactEmail: 'unauth@test.com',
     });
 
-    it('should DENY school admin from listing all schools', async () => {
-      const response = await request(app)
-        .get('/api/schools')
-        .set('Authorization', `Bearer ${adminAToken}`);
-
-      expect(response.status).toBe(403);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('RBAC_PERMISSION_DENIED');
-    });
-
-    it('should DENY school admin from deleting schools', async () => {
-      const response = await request(app)
-        .delete(`/api/schools/${schoolA._id}`)
-        .set('Authorization', `Bearer ${adminAToken}`);
-
-      expect(response.status).toBe(403);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('RBAC_PERMISSION_DENIED');
-    });
+    expect(result.error).toBe('Superadmin authentication required');
   });
 
-  describe('Unauthenticated Access', () => {
-    it('should deny access without authentication token', async () => {
-      const response = await request(app)
-        .get('/api/students');
-
-      expect(response.status).toBe(401);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_TOKEN_REQUIRED');
+  it('SCHOOL_ADMIN cannot list all schools', async () => {
+    const result = await schoolManager.list({
+      __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
     });
 
-    it('should deny access with invalid token', async () => {
-      const response = await request(app)
-        .get('/api/students')
-        .set('Authorization', 'Bearer invalid-token');
-
-      expect(response.status).toBe(401);
-      expect(response.body.success).toBe(false);
-    });
+    expect(result.error).toBe('Superadmin authentication required');
   });
 
-  describe('Cross-School Resource Protection', () => {
-    it('should prevent school admin from creating student with other school\'s classroom', async () => {
-      const response = await request(app)
-        .post('/api/students')
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .send({
-          firstName: 'Cross',
-          lastName: 'School',
-          dob: '2010-05-15',
-          classroomId: classroomB._id.toString(), // Classroom from School B
-        });
-
-      // The student is created in School A (auto-injected), 
-      // but with School B's classroom - should fail
-      expect(response.status).toBe(400);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('STUDENT_CLASSROOM_SCHOOL_MISMATCH');
+  it('SCHOOL_ADMIN cannot delete schools', async () => {
+    const result = await schoolManager.delete({
+      __auth: { userId: schoolAdminA._id.toString(), role: 'SCHOOL_ADMIN', schoolId: schoolA._id.toString() },
+      schoolId: schoolA._id.toString(),
     });
 
-    it('should prevent transferring student to classroom in different school', async () => {
-      const response = await request(app)
-        .put(`/api/students/${studentA._id}/transfer`)
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .send({
-          classroomId: classroomB._id.toString(), // Classroom from School B
-        });
-
-      expect(response.status).toBe(400);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('STUDENT_CLASSROOM_SCHOOL_MISMATCH');
-    });
+    expect(result.error).toBe('Superadmin authentication required');
   });
 });

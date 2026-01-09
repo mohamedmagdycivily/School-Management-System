@@ -1,86 +1,55 @@
 /**
- * Mock Redis client and rate limiter for testing
- * Completely bypasses Redis-based rate limiting in tests
+ * Mock Redis Client
+ * Used for testing without actual Redis connection
  */
 
-// Store for mock Redis operations
-const store = new Map();
+const mockStore = new Map();
 
-// Mock Redis client
 const mockRedisClient = {
-  get: jest.fn((key) => Promise.resolve(store.get(key) || null)),
-  set: jest.fn((key, value) => {
-    store.set(key, value);
+  get: jest.fn((key) => Promise.resolve(mockStore.get(key) || null)),
+  set: jest.fn((key, value, options) => {
+    mockStore.set(key, value);
     return Promise.resolve('OK');
   }),
   del: jest.fn((key) => {
-    store.delete(key);
+    mockStore.delete(key);
     return Promise.resolve(1);
   }),
   incr: jest.fn((key) => {
-    const current = parseInt(store.get(key) || '0', 10);
-    store.set(key, String(current + 1));
-    return Promise.resolve(current + 1);
+    const current = parseInt(mockStore.get(key) || '0', 10);
+    const newValue = current + 1;
+    mockStore.set(key, newValue.toString());
+    return Promise.resolve(newValue);
   }),
   expire: jest.fn(() => Promise.resolve(1)),
-  pexpire: jest.fn(() => Promise.resolve(1)),
   ttl: jest.fn(() => Promise.resolve(-1)),
-  pttl: jest.fn(() => Promise.resolve(-1)),
-  call: jest.fn(async (...args) => {
-    const command = String(args[0]).toUpperCase();
-    if (command === 'GET') {
-      return store.get(args[1]) || null;
-    }
-    if (command === 'SET') {
-      store.set(args[1], args[2]);
-      return 'OK';
-    }
-    if (command === 'PEXPIRE' || command === 'EXPIRE') {
-      return 1;
-    }
-    if (command === 'EVALSHA' || command === 'EVAL') {
-      // Return mock rate limit response [totalHits, resetTime]
-      return [1, Date.now() + 900000];
-    }
-    return null;
+  keys: jest.fn(() => Promise.resolve(Array.from(mockStore.keys()))),
+  flushall: jest.fn(() => {
+    mockStore.clear();
+    return Promise.resolve('OK');
   }),
+  quit: jest.fn(() => Promise.resolve('OK')),
+  disconnect: jest.fn(),
   on: jest.fn(),
-  quit: jest.fn(() => Promise.resolve()),
-  duplicate: jest.fn(function() { return this; }),
-  status: 'ready',
+  connect: jest.fn(() => Promise.resolve()),
 };
 
-const clearMockRedis = () => {
-  store.clear();
-};
+/**
+ * Clear the mock store between tests
+ */
+function clearMockStore() {
+  mockStore.clear();
+}
 
-// Mock the redis config module
-jest.mock('../../src/config/redis', () => ({
-  createRedisClient: jest.fn(() => mockRedisClient),
-  getRedisClient: jest.fn(() => mockRedisClient),
-  disconnectRedis: jest.fn(() => Promise.resolve()),
-}));
-
-// Create a no-op rate limiter middleware for tests
-const noOpRateLimiter = (req, res, next) => {
-  // Add mock headers
-  res.set('RateLimit-Limit', '100');
-  res.set('RateLimit-Remaining', '99');
-  res.set('RateLimit-Reset', String(Math.floor(Date.now() / 1000) + 900));
-  next();
-};
-
-// Mock the rate limiter middleware module
-jest.mock('../../src/middleware/rateLimiter.middleware', () => ({
-  createRateLimiter: jest.fn(() => noOpRateLimiter),
-  apiLimiter: noOpRateLimiter,
-  authLimiter: noOpRateLimiter,
-  sensitiveLimiter: noOpRateLimiter,
-  customLimiter: jest.fn(() => noOpRateLimiter),
-}));
+/**
+ * Get the current mock store contents
+ */
+function getMockStore() {
+  return Object.fromEntries(mockStore);
+}
 
 module.exports = {
   mockRedisClient,
-  clearMockRedis,
-  noOpRateLimiter,
+  clearMockStore,
+  getMockStore,
 };

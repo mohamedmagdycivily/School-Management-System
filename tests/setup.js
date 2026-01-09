@@ -16,8 +16,14 @@ beforeAll(async () => {
   await mongoose.connect(mongoUri);
 });
 
-// Cleanup after each test
+// Cleanup after each test (skip for integration tests which need data persistence)
 afterEach(async () => {
+  // Skip cleanup for integration tests - they manage their own cleanup
+  const testPath = expect.getState().testPath || '';
+  if (testPath.includes('integration.test.js')) {
+    return;
+  }
+  
   // Clear all collections
   const collections = mongoose.connection.collections;
   for (const key in collections) {

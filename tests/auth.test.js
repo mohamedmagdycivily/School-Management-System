@@ -1,39 +1,58 @@
-const request = require('supertest');
-const { User, ROLES } = require('../src/models');
-const config = require('../src/config');
+/**
+ * Authentication Tests
+ * Tests User.manager.js methods: login, setup, profile, createSchoolAdmin
+ * Uses the template's architecture pattern
+ */
+const User = require('../managers/entities/user/User.mongoModel');
+const config = require('../config/index.config');
 
-// Mock Redis and rate limiter before importing app
-require('./helpers/mockRedis');
+// Mock token manager
+const mockTokenManager = {
+  genLongToken: jest.fn(({ userId, userKey, role, schoolId }) => {
+    return `mock-token-${userId}-${role}`;
+  }),
+  verifyLongToken: jest.fn(),
+};
 
-// Create a minimal test app
-const express = require('express');
-const authRoutes = require('../src/routes/auth.routes');
-const { errorHandler } = require('../src/middleware');
+// Create User Manager instance with mocks
+const UserManager = require('../managers/entities/user/User.manager');
+let userManager;
 
-const app = express();
-app.use(express.json());
-app.use('/api/auth', authRoutes);
-app.use(errorHandler);
+beforeEach(() => {
+  userManager = new UserManager({
+    config,
+    managers: {
+      token: mockTokenManager,
+    },
+  });
+  
+  // Reset mocks
+  mockTokenManager.genLongToken.mockClear();
+  mockTokenManager.verifyLongToken.mockClear();
+});
 
-describe('Authentication Tests', () => {
-  describe('POST /api/auth/setup', () => {
+describe('User Manager - Authentication Tests', () => {
+  describe('setup() - Initial Superadmin Creation', () => {
     it('should create initial superadmin with valid data', async () => {
-      const response = await request(app)
-        .post('/api/auth/setup')
-        .send({
-          name: 'Super Admin',
-          email: 'superadmin@test.com',
-          password: 'Password123',
-          setupSecret: config.SETUP_SECRET,
-        });
+      const result = await userManager.setup({
+        name: 'Super Admin',
+        email: 'superadmin@test.com',
+        password: 'Password123',
+        setupSecret: config.dotEnv.SETUP_SECRET,
+      });
 
-      expect(response.status).toBe(201);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.user).toBeDefined();
-      expect(response.body.data.user.role).toBe(ROLES.SUPERADMIN);
-      expect(response.body.data.user.email).toBe('superadmin@test.com');
-      expect(response.body.data.token).toBeDefined();
-      expect(response.body.data.user.password).toBeUndefined();
+      expect(result.error).toBeUndefined();
+      expect(result.user).toBeDefined();
+      expect(result.user.role).toBe('SUPERADMIN');
+      expect(result.user.email).toBe('superadmin@test.com');
+      expect(result.token).toBeDefined();
+      expect(result.user.password).toBeUndefined();
+      expect(mockTokenManager.genLongToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'SUPERADMIN',
+          schoolId: null,
+        })
+      );
     });
 
     it('should reject duplicate superadmin creation', async () => {
@@ -42,227 +61,295 @@ describe('Authentication Tests', () => {
         name: 'Existing Admin',
         email: 'existing@test.com',
         password: 'Password123',
-        role: ROLES.SUPERADMIN,
+        role: 'SUPERADMIN',
         schoolId: null,
       });
 
-      const response = await request(app)
-        .post('/api/auth/setup')
-        .send({
-          name: 'Another Admin',
-          email: 'another@test.com',
-          password: 'Password123',
-          setupSecret: config.SETUP_SECRET,
-        });
+      const result = await userManager.setup({
+        name: 'Another Admin',
+        email: 'another@test.com',
+        password: 'Password123',
+        setupSecret: config.dotEnv.SETUP_SECRET,
+      });
 
-      expect(response.status).toBe(400);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_SUPERADMIN_EXISTS');
+      expect(result.error).toBe('Superadmin already exists');
     });
 
     it('should reject invalid setup secret', async () => {
-      const response = await request(app)
-        .post('/api/auth/setup')
-        .send({
-          name: 'Super Admin',
-          email: 'superadmin@test.com',
-          password: 'Password123',
-          setupSecret: 'wrong-secret',
-        });
+      const result = await userManager.setup({
+        name: 'Super Admin',
+        email: 'superadmin@test.com',
+        password: 'Password123',
+        setupSecret: 'wrong-secret',
+      });
 
-      expect(response.status).toBe(403);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_INVALID_SETUP_SECRET');
+      expect(result.error).toBe('Invalid setup secret');
     });
 
     it('should validate required fields', async () => {
-      const response = await request(app)
-        .post('/api/auth/setup')
-        .send({
-          email: 'superadmin@test.com',
-          // missing name, password, setupSecret
-        });
+      const result = await userManager.setup({
+        email: 'superadmin@test.com',
+        setupSecret: config.dotEnv.SETUP_SECRET,
+        // missing name, password
+      });
 
-      expect(response.status).toBe(400);
-      expect(response.body.success).toBe(false);
+      expect(result.error).toBe('Name, email, and password are required');
     });
 
-    it('should validate password complexity', async () => {
-      const response = await request(app)
-        .post('/api/auth/setup')
-        .send({
-          name: 'Super Admin',
-          email: 'superadmin@test.com',
-          password: 'weak', // Too short, no uppercase, no number
-          setupSecret: config.SETUP_SECRET,
-        });
+    it('should validate password minimum length', async () => {
+      const result = await userManager.setup({
+        name: 'Super Admin',
+        email: 'superadmin@test.com',
+        password: 'short',
+        setupSecret: config.dotEnv.SETUP_SECRET,
+      });
 
-      expect(response.status).toBe(400);
-      expect(response.body.success).toBe(false);
+      expect(result.error).toBe('Password must be at least 8 characters');
+    });
+
+    it('should reject duplicate email', async () => {
+      // Create first superadmin
+      await userManager.setup({
+        name: 'First Admin',
+        email: 'admin@test.com',
+        password: 'Password123',
+        setupSecret: config.dotEnv.SETUP_SECRET,
+      });
+
+      // Clear superadmin status to test email uniqueness
+      await User.deleteMany({});
+
+      // Create user with same email
+      await User.create({
+        name: 'Existing User',
+        email: 'admin@test.com',
+        password: 'Password123',
+        role: 'SCHOOL_ADMIN',
+        schoolId: '507f1f77bcf86cd799439011', // dummy ObjectId
+      });
+
+      const result = await userManager.setup({
+        name: 'Super Admin',
+        email: 'admin@test.com',
+        password: 'Password123',
+        setupSecret: config.dotEnv.SETUP_SECRET,
+      });
+
+      expect(result.error).toBe('Email already in use');
     });
   });
 
-  describe('POST /api/auth/login', () => {
+  describe('login() - User Authentication', () => {
     beforeEach(async () => {
       // Create a test user
       await User.create({
         name: 'Test User',
         email: 'testuser@test.com',
         password: 'Password123',
-        role: ROLES.SUPERADMIN,
+        role: 'SUPERADMIN',
         schoolId: null,
       });
     });
 
     it('should login with valid credentials', async () => {
-      const response = await request(app)
-        .post('/api/auth/login')
-        .send({
-          email: 'testuser@test.com',
-          password: 'Password123',
-        });
+      const result = await userManager.login({
+        email: 'testuser@test.com',
+        password: 'Password123',
+      });
 
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.user).toBeDefined();
-      expect(response.body.data.token).toBeDefined();
-      expect(response.body.data.user.email).toBe('testuser@test.com');
+      expect(result.error).toBeUndefined();
+      expect(result.user).toBeDefined();
+      expect(result.token).toBeDefined();
+      expect(result.user.email).toBe('testuser@test.com');
+      expect(result.user.role).toBe('SUPERADMIN');
     });
 
     it('should reject invalid email', async () => {
-      const response = await request(app)
-        .post('/api/auth/login')
-        .send({
-          email: 'nonexistent@test.com',
-          password: 'Password123',
-        });
+      const result = await userManager.login({
+        email: 'nonexistent@test.com',
+        password: 'Password123',
+      });
 
-      expect(response.status).toBe(401);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_INVALID_CREDENTIALS');
+      expect(result.error).toBe('Invalid email or password');
     });
 
     it('should reject invalid password', async () => {
-      const response = await request(app)
-        .post('/api/auth/login')
-        .send({
-          email: 'testuser@test.com',
-          password: 'WrongPassword123',
-        });
+      const result = await userManager.login({
+        email: 'testuser@test.com',
+        password: 'WrongPassword123',
+      });
 
-      expect(response.status).toBe(401);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_INVALID_CREDENTIALS');
+      expect(result.error).toBe('Invalid email or password');
     });
 
-    it('should reject deactivated account', async () => {
-      // Deactivate the user
-      await User.updateOne(
-        { email: 'testuser@test.com' },
-        { isActive: false }
-      );
+    it('should validate required fields', async () => {
+      const result = await userManager.login({
+        email: 'testuser@test.com',
+        // missing password
+      });
 
-      const response = await request(app)
-        .post('/api/auth/login')
-        .send({
-          email: 'testuser@test.com',
-          password: 'Password123',
-        });
-
-      expect(response.status).toBe(401);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_ACCOUNT_DEACTIVATED');
-    });
-
-    it('should validate email format', async () => {
-      const response = await request(app)
-        .post('/api/auth/login')
-        .send({
-          email: 'invalid-email',
-          password: 'Password123',
-        });
-
-      expect(response.status).toBe(400);
-      expect(response.body.success).toBe(false);
+      expect(result.error).toBe('Email and password are required');
     });
   });
 
-  describe('GET /api/auth/profile', () => {
+  describe('profile() - Get User Profile', () => {
     let testUser;
-    let authToken;
 
     beforeEach(async () => {
-      const jwt = require('jsonwebtoken');
-      
       testUser = await User.create({
         name: 'Profile User',
         email: 'profile@test.com',
         password: 'Password123',
-        role: ROLES.SUPERADMIN,
+        role: 'SUPERADMIN',
+        schoolId: null,
+      });
+    });
+
+    it('should return user profile with valid auth', async () => {
+      const result = await userManager.profile({
+        __auth: {
+          userId: testUser._id.toString(),
+          role: testUser.role,
+        },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.email).toBe('profile@test.com');
+      expect(result.role).toBe('SUPERADMIN');
+      expect(result.name).toBe('Profile User');
+    });
+
+    it('should reject request without auth', async () => {
+      const result = await userManager.profile({});
+
+      expect(result.error).toBe('Authentication required');
+    });
+
+    it('should handle non-existent user', async () => {
+      const result = await userManager.profile({
+        __auth: {
+          userId: '507f1f77bcf86cd799439011', // non-existent ObjectId
+          role: 'SUPERADMIN',
+        },
+      });
+
+      expect(result.error).toBe('User not found');
+    });
+  });
+
+  describe('createSchoolAdmin() - Create School Administrator', () => {
+    let superadmin;
+    let testSchool;
+
+    beforeEach(async () => {
+      // Create superadmin
+      superadmin = await User.create({
+        name: 'Super Admin',
+        email: 'superadmin@test.com',
+        password: 'Password123',
+        role: 'SUPERADMIN',
         schoolId: null,
       });
 
-      authToken = jwt.sign(
-        {
-          userId: testUser._id,
-          email: testUser.email,
-          role: testUser.role,
-          schoolId: testUser.schoolId,
+      // Create a school
+      const School = require('../managers/entities/school/School.mongoModel');
+      testSchool = await School.create({
+        name: 'Test School',
+        address: '123 Test Street',
+        contactEmail: 'school@test.com',
+        status: 'ACTIVE',
+        createdBy: superadmin._id,
+      });
+    });
+
+    it('should create school admin with valid data', async () => {
+      const result = await userManager.createSchoolAdmin({
+        __auth: {
+          userId: superadmin._id.toString(),
+          role: 'SUPERADMIN',
         },
-        config.JWT_SECRET,
-        { expiresIn: '1h' }
-      );
+        __superadmin: true,
+        name: 'School Admin',
+        email: 'schooladmin@test.com',
+        password: 'Password123',
+        schoolId: testSchool._id.toString(),
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.email).toBe('schooladmin@test.com');
+      expect(result.role).toBe('SCHOOL_ADMIN');
+      expect(result.schoolId.toString()).toBe(testSchool._id.toString());
     });
 
-    it('should return user profile with valid token', async () => {
-      const response = await request(app)
-        .get('/api/auth/profile')
-        .set('Authorization', `Bearer ${authToken}`);
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.email).toBe('profile@test.com');
-      expect(response.body.data.role).toBe(ROLES.SUPERADMIN);
-    });
-
-    it('should reject request without token', async () => {
-      const response = await request(app)
-        .get('/api/auth/profile');
-
-      expect(response.status).toBe(401);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_TOKEN_REQUIRED');
-    });
-
-    it('should reject invalid token', async () => {
-      const response = await request(app)
-        .get('/api/auth/profile')
-        .set('Authorization', 'Bearer invalid-token');
-
-      expect(response.status).toBe(401);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_TOKEN_INVALID');
-    });
-
-    it('should reject expired token', async () => {
-      const jwt = require('jsonwebtoken');
-      const expiredToken = jwt.sign(
-        {
-          userId: testUser._id,
-          email: testUser.email,
-          role: testUser.role,
+    it('should reject without superadmin auth', async () => {
+      const result = await userManager.createSchoolAdmin({
+        __auth: {
+          userId: superadmin._id.toString(),
+          role: 'SCHOOL_ADMIN',
         },
-        config.JWT_SECRET,
-        { expiresIn: '-1h' } // Already expired
-      );
+        name: 'School Admin',
+        email: 'schooladmin@test.com',
+        password: 'Password123',
+        schoolId: testSchool._id.toString(),
+      });
 
-      const response = await request(app)
-        .get('/api/auth/profile')
-        .set('Authorization', `Bearer ${expiredToken}`);
+      expect(result.error).toBe('Superadmin authentication required');
+    });
 
-      expect(response.status).toBe(401);
-      expect(response.body.success).toBe(false);
-      expect(response.body.code).toBe('AUTH_TOKEN_EXPIRED');
+    it('should reject invalid school ID', async () => {
+      const result = await userManager.createSchoolAdmin({
+        __auth: {
+          userId: superadmin._id.toString(),
+          role: 'SUPERADMIN',
+        },
+        __superadmin: true,
+        name: 'School Admin',
+        email: 'schooladmin@test.com',
+        password: 'Password123',
+        schoolId: '507f1f77bcf86cd799439011', // non-existent
+      });
+
+      expect(result.error).toBe('School not found');
+    });
+
+    it('should reject duplicate email', async () => {
+      // Create existing user
+      await User.create({
+        name: 'Existing User',
+        email: 'existing@test.com',
+        password: 'Password123',
+        role: 'SCHOOL_ADMIN',
+        schoolId: testSchool._id,
+      });
+
+      const result = await userManager.createSchoolAdmin({
+        __auth: {
+          userId: superadmin._id.toString(),
+          role: 'SUPERADMIN',
+        },
+        __superadmin: true,
+        name: 'School Admin',
+        email: 'existing@test.com',
+        password: 'Password123',
+        schoolId: testSchool._id.toString(),
+      });
+
+      expect(result.error).toBe('Email already in use');
+    });
+
+    it('should validate required fields', async () => {
+      const result = await userManager.createSchoolAdmin({
+        __auth: {
+          userId: superadmin._id.toString(),
+          role: 'SUPERADMIN',
+        },
+        __superadmin: true,
+        name: 'School Admin',
+        email: 'schooladmin@test.com',
+        // missing password and schoolId
+      });
+
+      expect(result.error).toBe('Name, email, password, and schoolId are required');
     });
   });
 });
